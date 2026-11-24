@@ -101,7 +101,7 @@ west twister -T tests/temp_alarm -p native_sim -b
 
 ---
 
-## Task 0 — Finish the Fake  `git tag l8-task0`
+## Task 0 — Finish the Fake  (branch `l8-task0`)
 
 The fake device has no `sample_fetch` yet. Fill in the four `TODO(l8-task0)`
 spots:
@@ -133,13 +133,15 @@ on `native_sim`.
 west twister -T tests/temp_alarm -p native_sim
 ```
 
-### Tag `l8-task0`
+### Submit `l8-task0`
 
-After the fake is finished, tag the commit `l8-task0`.
+Work on a branch named `l8-task0`, started from `l8-demo-homework`. After the fake is
+finished, push the branch and open a pull request against `l8-demo-homework`. See
+`HOMEWORK.md` at the repository root for the whole flow.
 
 ---
 
-## Task 1 — Happy Paths  `git tag l8-task1`
+## Task 1 — Happy Paths  (branch `l8-task1`)
 
 Open `src/test_basic.c` and fill in each stub `ZTEST` body according to the
 **Task 1** section of `TEST_SPEC.md`. Study `test_status_after_init` first — it
@@ -162,13 +164,14 @@ For each test:
 west twister -T tests/temp_alarm -p native_sim
 ```
 
-### Tag `l8-task1`
+### Submit `l8-task1`
 
-After every Task 1 test passes, tag the commit `l8-task1`.
+Work on a branch named `l8-task1`, started from your `l8-task0` branch. After every Task 1
+test passes, push the branch and open a pull request against `l8-demo-homework`.
 
 ---
 
-## Task 2 — Error Paths  `git tag l8-task2`
+## Task 2 — Error Paths  (branch `l8-task2`)
 
 Open `src/test_error_paths.c` and fill in each stub `ZTEST` body according to
 the **Task 2** section of `TEST_SPEC.md`. Seven tests to write across two
@@ -193,13 +196,14 @@ For each test:
 west twister -T tests/temp_alarm -p native_sim
 ```
 
-### Tag `l8-task2`
+### Submit `l8-task2`
 
-After every Task 2 test passes, tag the commit `l8-task2`.
+Work on a branch named `l8-task2`, started from your `l8-task1` branch. After every Task 2
+test passes, push the branch and open a pull request against `l8-demo-homework`.
 
 ---
 
-## Task 3 — Coverage Analysis  `git tag l8-task3`
+## Task 3 — Coverage Analysis  (branch `l8-task3`)
 
 ```bash
 # native_sim is built with the host GCC, so --gcov-tool gcov selects the matching host gcov
@@ -208,7 +212,7 @@ west twister -T tests/temp_alarm -p native_sim \
     --coverage-basedir app/modules/temp_alarm
 ```
 
-1. Run the command above at the `l8-task1` commit (`git checkout l8-task1`).
+1. Run the command above on your `l8-task1` branch (`git checkout l8-task1`).
 2. Open `twister-out/coverage/index.html` in a browser and click into
    `temp_alarm.c`. With only Task 1 done, the expected numbers are:
    ```
@@ -216,8 +220,8 @@ west twister -T tests/temp_alarm -p native_sim \
    Functions: 100.0%  (5/5)
    Branches:  55.6%  (10/18)
    ```
-3. Go back to your branch (`git checkout -`), which is at `l8-task2`, and run
-   the command again. The expected numbers are:
+3. Create the `l8-task3` branch from your `l8-task2` branch
+   (`git checkout l8-task2 && git checkout -b l8-task3`) and run the command again. The expected numbers are:
    ```
    Lines:     100.0%  (54/54)
    Functions: 100.0%  (5/5)
@@ -230,7 +234,8 @@ west twister -T tests/temp_alarm -p native_sim \
    not? Notice that function coverage is 100% both times: only the line and
    branch numbers show what was missing.
 
-### Tag `l8-task3`
+### Submit `l8-task3`
 
-Include the `twister-out/coverage/` directory from the second run in the
-commit and tag it `l8-task3`.
+Commit the `twister-out/coverage/` directory from the second run on the
+`l8-task3` branch, push it and open a pull request against `l8-demo-homework`.
+The checks run the coverage themselves and compare it with your report.

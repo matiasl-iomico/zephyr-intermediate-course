@@ -1,0 +1,5 @@
+tests:
+  homework.l2.counter:
+    platform_allow: native_sim
+    tags: homework
+    timeout: 60

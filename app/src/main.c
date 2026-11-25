@@ -5,9 +5,12 @@
 LOG_MODULE_REGISTER(homework, LOG_LEVEL_INF);
 
 #define STACK_SIZE            2048
-#define CONTROL_PRIORITY         7
+#define CONTROL_PRIORITY         2
 #define MAINTENANCE_PRIORITY     4
 #define EVENT_PERIOD_MS        250
+#define DEADLINE_MS             10
+
+static uint32_t misses;
 #define MAINTENANCE_LOAD_US  45000
 
 struct control_event {
@@ -64,7 +67,14 @@ static void control_fn(void *p1, void *p2, void *p3)
             continue;
         }
 
-        LOG_INF("[CONTROL] processed seq=%u", event.seq);
+        /* Start latency: event ready -> control starts on it. */
+        uint32_t latency = k_uptime_get_32() - event.ready_ms;
+
+        if (latency > DEADLINE_MS) {
+            misses++; /* always counted */
+            LOG_WRN_RATELIMIT("[CONTROL] deadline miss seq=%u latency=%u ms", event.seq, latency);
+        }
+        LOG_INF("[LAT] seq=%u latency_ms=%u misses=%u", event.seq, latency, misses);
 
         /* TODO: Define a response-time guarantee. */
         /* TODO: Measure latency and count every deadline miss. */

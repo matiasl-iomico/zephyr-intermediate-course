@@ -8,7 +8,8 @@
 #
 # Repository variables (optional): MANUAL_REVIEWER, the instructors asked to review
 # `needs-instructor` PRs and told when a check run left no result (`checks-not-run`:
-# fix the cause, then re-run the failed jobs), comma-separated (default: nobody);
+# fix the cause, then re-run the failed jobs), separated by commas or spaces, e.g.
+# "matiflp, carlassaraf" (default: nobody). Each one must have access to the repository;
 # CLOSE_APPROVED (default true).
 
 name: Homework review

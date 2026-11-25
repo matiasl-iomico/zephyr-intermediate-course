@@ -41,7 +41,7 @@ def stub_checks(report, root, stubs, done_label=""):
             by_file[rel] = find_tests(src) if src is not None else None
         tests = by_file[rel]
         if tests is None:
-            report.check(False, f"`{rel}` exists at the repository root",
+            report.check(False, f"`{rel}` exists at the repository root", path=rel,
                          fix=f"Implement the tests in `{rel}` at the repository root, not in a copy of the project.")
             return False
         if (suite, name) not in tests:
@@ -109,11 +109,11 @@ def mutant_checks(report, root, mutants_json, upto):
 def main():
     args = common_args(__doc__.splitlines()[0]).parse_args()
     root = os.path.abspath(args.root)
-    report = Report("l8-task1", "temp_alarm happy-path tests")
+    report = Report("l8-task1", "temp_alarm happy-path tests", where=BASIC)
     if fake_checks(report, root) and stub_checks(report, root, TASK1):
         scaffold_checks(report, root, BASIC)
         if args.twister_out:
-            twister = load_twister(report, args.twister_out, args.platform)
+            twister = load_twister(report, args.twister_out, args.platform, root)
             if twister:
                 case_checks(report, twister, [PROVIDED[2]] + [n for _, _, n in TASK1], test_lines(root))
                 if args.mutants and not any(c["ok"] is False for c in report.checks):

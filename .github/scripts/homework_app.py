@@ -163,6 +163,31 @@ def find_function(files, name):
     return None, None, None
 
 
+def locate(files, *needles):
+    """(path, line) of the first needle found in the sources, comments ignored, or (None, None).
+
+    A needle is a plain string (e.g. a log tag such as "[T7]", found inside string literals too)
+    or a compiled regex. Needles are tried in order, so put the most precise one first.
+    """
+    for needle in needles:
+        for path, text in files.items():
+            code = strip_comments(text)
+            if isinstance(needle, str):
+                pos = code.find(needle)
+            else:
+                m = needle.search(code)
+                pos = m.start() if m else -1
+            if pos >= 0:
+                return path, line_of(code, pos)
+    return None, None
+
+
+def where(files, *needles):
+    """locate() as keyword arguments for Report.check: `report.check(ok, label, **app.where(files, "[T7]"), ...)`."""
+    path, line = locate(files, *needles)
+    return {"path": path, "line": line}
+
+
 def kconfig(root, app_dir, name):
     """The value of CONFIG_<name> in the app's prj.conf (last assignment wins), or None."""
     text = read(os.path.join(root, app_dir, "prj.conf")) or ""
@@ -186,16 +211,90 @@ def build(source, build_dir, board="native_sim", cmake_args=(), timeout=900):
         return False, "the build took too long"
     with open(os.path.join(os.path.dirname(os.path.abspath(build_dir)) or ".", "build.log"), "a") as f:
         f.write(p.stdout)
-    return p.returncode == 0, p.stdout[-3000:]
+    return p.returncode == 0, p.stdout
+
+
+ANSI = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
 
 
 def build_error(log):
     """The first compiler or CMake error line of a build log, for a short message."""
+    log = ANSI.sub("", log or "")
     for pat in (r"^.*\berror: .*$", r"^CMake Error.*$", r"^.*undefined reference.*$", r"^FAILED: .*$"):
         m = re.search(pat, log, re.M)
         if m:
             return m.group(0).strip()[:300]
     return "the build failed"
+
+
+# file:line of an error in the student's files: compiler, CMake, Kconfig (prj.conf) and devicetree messages.
+_BUILD_LOCATIONS = (
+    re.compile(r"^(?P<file>[^\s:]+):(?P<line>\d+):(?:\d+:)? (?:fatal )?error\b", re.M),
+    re.compile(r"^CMake Error at (?P<file>[^\s:]+):(?P<line>\d+)", re.M),
+    re.compile(r"^(?P<file>[^\s:]+\.(?:conf|overlay|dts|dtsi)):(?P<line>\d+):", re.M),
+    re.compile(r"^(?P<file>[^\s:]+\.c):(?P<line>\d+)?:?.*\bundefined reference\b", re.M),
+    re.compile(r"^(?P<file>[^\s:]+\.c):\(\.text.*\bundefined reference\b", re.M),
+)
+# An error inside a Zephyr macro (zassert_*, LOG_*) is reported in Zephyr's header; the student's line
+# is the "in expansion of macro" note that follows it.
+_MACRO_NOTE = re.compile(r"^(?P<file>[^\s:]+):(?P<line>\d+):(?:\d+:)? note: in expansion of macro\b", re.M)
+_FIRST_ERROR = re.compile(r"^[^\s:]+:\d+:(?:\d+:)? (?:fatal )?error\b", re.M)
+
+
+def build_location(log, src_dir, rel_dir):
+    """(path, line) of the first build error in a file under src_dir, as rel_dir/<path>, or (None, None).
+
+    Errors in Zephyr's own files are skipped: the message is about the student's code only when the
+    file is theirs. rel_dir is src_dir relative to the repository root ("" for the root).
+    """
+    src_dir = os.path.realpath(src_dir)
+    log = ANSI.sub("", log or "")
+    first_error = _FIRST_ERROR.search(log)
+    searches = [(pat, 0) for pat in _BUILD_LOCATIONS]
+    if first_error:
+        searches.append((_MACRO_NOTE, first_error.start()))
+    found = []
+    for pat, start in searches:
+        for m in pat.finditer(log, start):
+            path = m.group("file")
+            full = os.path.realpath(path if os.path.isabs(path) else os.path.join(src_dir, path))
+            if full == src_dir or not full.startswith(src_dir + os.sep):
+                continue
+            line = m.groupdict().get("line")
+            rel = os.path.relpath(full, src_dir)
+            found.append((m.start(), os.path.normpath(os.path.join(rel_dir, rel)), int(line) if line else None))
+            break
+    if not found:
+        return None, None
+    _, path, line = min(found)
+    return path, line
+
+
+def check_build(report, root, rel_dir, build_dir, label="the app builds for `native_sim`", board="native_sim",
+                cmake_args=(), src_dir=None):
+    """Build the app in rel_dir (or in src_dir, a modified copy of it) and record the result.
+
+    On a failure the check names the first error and the student's file and line it is in.
+    """
+    src = src_dir or os.path.join(root, rel_dir)
+    ok, log = build(src, build_dir, board=board, cmake_args=cmake_args)
+    path, line = build_location(log, src, rel_dir)
+    error = build_error(log)
+    for prefix in {os.path.realpath(src), os.path.abspath(src)}:  # the runner's paths -> repository paths
+        error = error.replace(prefix + os.sep, f"{rel_dir}/" if rel_dir else "")
+    report.check(ok, label, path=path, line=line,
+                 fix=f"Fix the build: {error}. Try `west build -b {board} {rel_dir or '.'}`.")
+    return ok
+
+
+def twister_build_location(outdir, src_dir, rel_dir):
+    """build_location() over every build.log twister wrote under outdir."""
+    for dirpath, _, filenames in os.walk(outdir):
+        if "build.log" in filenames:
+            path, line = build_location(read(os.path.join(dirpath, "build.log")), src_dir, rel_dir)
+            if path:
+                return path, line
+    return None, None
 
 
 def config_value(build_dir, name):
@@ -221,7 +320,10 @@ def run_native(build_dir, seconds, timeout=120):
 
 
 def run_twister(test_dir, outdir, platform="native_sim", timeout=900):
-    """Run a course test with twister. Returns ({case name: status}, problem or None)."""
+    """Run a course test with twister. Returns ({case name: status}, problem or None).
+
+    On a build problem, twister_build_location(outdir, ...) finds the file to fix.
+    """
     import json
     cmd = ["west", "twister", "-T", test_dir, "-p", platform, "--outdir", outdir, "--inline-logs",
            "--disable-warnings-as-errors"]

@@ -40,7 +40,9 @@ def static_checks(report, root):
     report.check(not polling, "the polling thread is removed", path=polling[0]["path"] if polling else MAIN,
                  line=polling[0]["line"] if polling else None,
                  fix="Remove `polling_thread` and `polling_fn()`: the work handler replaces them.")
-    report.check(not re.search(r"\bsensor_flag\b", code), "the shared `sensor_flag` is removed", path=MAIN,
+    flag = re.compile(r"\bsensor_flag\b")
+    path, line = app.locate(files, flag)
+    report.check(not path, "the shared `sensor_flag` is removed", path=path, line=line,
                  fix="Remove `sensor_flag`: `k_work_submit()` tells the handler there is an event.")
     bonus = bool(re.search(r"\bk_work_reschedule\s*\(", code))
     has_work = re.search(r"\bK_WORK_(?:DELAYABLE_)?DEFINE\s*\(|\bk_work_init(?:_delayable)?\s*\(", code)
@@ -55,41 +57,60 @@ def static_checks(report, root):
     return bonus
 
 
+def handler_at(files):
+    """Keyword path/line of the `[HANDLER]` log line, or of the work handler, for Report.check."""
+    found = app.where(files, "[HANDLER]")
+    if found["path"]:
+        return found
+    for path, text in files.items():
+        code = app.strip_comments(text)
+        for macro in ("K_WORK_DEFINE", "K_WORK_DELAYABLE_DEFINE", "k_work_init", "k_work_init_delayable"):
+            for args, line, _ in app.calls(code, macro):
+                if len(args) > 1:
+                    fpath, _, fline = app.find_function(files, args[1])
+                    return {"path": fpath or path, "line": fline or line}
+    return found
+
+
 def run_checks(report, root, work, bonus):
     build_dir = os.path.join(work, "build")
-    ok, log = app.build(os.path.join(root, APP), build_dir)
-    if not report.check(ok, "the app builds for `native_sim`",
-                        fix=f"Fix the build: {app.build_error(log)}. Try `west build -b native_sim {APP}`."):
+    if not app.check_build(report, root, APP, build_dir):
         return
+    files = app.sources(root, APP)
+    sensor = app.where(files, "[SENSOR]")
+    handler = handler_at(files)
+    submit = app.where(files, re.compile(r"\bk_work_(?:submit|reschedule|schedule)\w*\s*\("), "[SENSOR]")
     out, _ = app.run_native(build_dir, SECONDS)
     events = [(i, app.field(ln, "tick")) for i, ln in app.tagged(out, "SENSOR") if re.search(r"\bevent\s+\d", ln)]
     handled = [(i, app.field(ln, "tick")) for i, ln in app.tagged(out, "HANDLER")]
     report.check(not app.tagged(out, "CONSUMER"), "no `[CONSUMER]` lines from the old polling thread",
+                 **app.where(files, "[CONSUMER]"),
                  fix="Remove the polling consumer; only the work handler processes events.")
-    if not report.check(events, "`[SENSOR] event` lines are printed",
+    if not report.check(events, "`[SENSOR] event` lines are printed", **sensor,
                         fix="Keep the starter's `[SENSOR] event <i>  tick=<ms>` log line in the sensor thread."):
         return
-    if not report.check(handled, "`[HANDLER]` lines are printed",
+    if not report.check(handled, "`[HANDLER]` lines are printed", **handler,
                         fix="Log `[HANDLER] processed event <n>  tick=<ms>` in the work handler (the starter's "
                             "placeholder has it)."):
         return
     if None in [t for _, t in events + handled]:
-        report.check(False, "the log lines include `tick=`",
+        report.check(False, "the log lines include `tick=`", **(sensor if None in [t for _, t in events] else handler),
                      fix="Keep `tick=%u` with `k_uptime_get_32()` in the `[SENSOR]` and `[HANDLER]` lines.")
         return
     if not bonus:
         report.check(len(handled) == len(events), f"one handler run per event ({len(handled)} for {len(events)})",
+                     **submit,
                      fix=f"The handler ran {len(handled)} times for {len(events)} events. Submit the work once per "
                          "sensor event and log `[HANDLER]` once per handler run.")
         late = [(e, h) for (_, e), (_, h) in zip(events, handled) if not 0 <= h - e <= TICK_SLACK_MS]
-        report.check(not late, "each event is handled right away, not on a polling period",
+        report.check(not late, "each event is handled right away, not on a polling period", **submit,
                      fix="The handler ran %d ms after its event; it should run in the same tick. Submit the work from "
                          "the sensor thread instead of waking up periodically." % (late[0][1] - late[0][0])
                      if late else None)
     else:
         report.note("Bonus: the sensor uses `k_work_reschedule()` to debounce bursts.")
         report.check(0 < len(handled) < len(events),
-                     f"bursts collapse into fewer handler runs ({len(handled)} for {len(events)} events)",
+                     f"bursts collapse into fewer handler runs ({len(handled)} for {len(events)} events)", **submit,
                      fix=f"The handler ran {len(handled)} times for {len(events)} events; with `k_work_reschedule()` "
                          "each burst should give one run.")
         early = []
@@ -97,12 +118,12 @@ def run_checks(report, root, work, bonus):
             before = [t for j, t in events if j < i]
             if before and h - before[-1] < 20:
                 early.append(h)
-        report.check(not early, "each handler run comes after the burst's debounce delay",
+        report.check(not early, "each handler run comes after the burst's debounce delay", **submit,
                      fix="A handler ran less than 20 ms after the last event of its burst. Reschedule the delayable "
                          "work on every event, with a delay longer than the burst (e.g. 30 ms).")
     summary = app.tagged(out, "SUMMARY")
     report.check(summary and app.field(summary[-1][1], "handler_runs") == len(handled),
-                 "`[SUMMARY]` reports the handler runs",
+                 "`[SUMMARY]` reports the handler runs", **app.where(files, "[SUMMARY]"),
                  fix="Print `[SUMMARY] events=<n> handler_runs=<n>` at the end, with the counts from the run.")
 
 
@@ -113,7 +134,7 @@ def main():
     ap.add_argument("--no-run", action="store_true", help="only read the sources")
     ap.add_argument("--json", help="write the result JSON here")
     args = ap.parse_args()
-    report = Report("l3-task1", "Polling to workqueue")
+    report = Report("l3-task1", "Polling to workqueue", where=MAIN)
     bonus = static_checks(report, os.path.abspath(args.root))
     if bonus is not None and not args.no_run and not any(c["ok"] is False for c in report.checks):
         run_checks(report, os.path.abspath(args.root), os.path.abspath(args.work), bonus)

@@ -39,7 +39,7 @@ def all_checks(report, root, args, upto=2):
     if not args.twister_out:
         report.note("Tests were not run (no --twister-out); only the source was checked.")
         return False
-    twister = load_twister(report, args.twister_out, args.platform)
+    twister = load_twister(report, args.twister_out, args.platform, root)
     if not twister:
         return False
     case_checks(report, twister, ALL_TESTS, test_lines(root))
@@ -50,7 +50,7 @@ def all_checks(report, root, args, upto=2):
 
 def main():
     args = common_args(__doc__.splitlines()[0]).parse_args()
-    report = Report("l8-task2", "temp_alarm error-path tests")
+    report = Report("l8-task2", "temp_alarm error-path tests", where=ERRORS)
     all_checks(report, os.path.abspath(args.root), args)
     return report.finish(args.json)
 

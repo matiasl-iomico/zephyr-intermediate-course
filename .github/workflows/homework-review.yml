@@ -7,8 +7,9 @@
 #   through the API, and never builds or runs anything from the PR.
 #
 # Repository variables (optional): MANUAL_REVIEWER, the instructors asked to review
-# `needs-instructor` PRs, comma-separated (default: nobody); CLOSE_APPROVED
-# (default true).
+# `needs-instructor` PRs and told when a check run left no result (`checks-not-run`:
+# fix the cause, then re-run the failed jobs), comma-separated (default: nobody);
+# CLOSE_APPROVED (default true).
 
 name: Homework review
 

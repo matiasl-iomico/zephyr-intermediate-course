@@ -57,10 +57,13 @@ debounce delay.
 
 ## L4 — zbus (`l4-task1`, from `main`)
 
-- `app/src/sensor_msg.h` defines `struct sensor_msg` and declares the channel with
-  `ZBUS_CHAN_DECLARE(sensor_chan);`. Define the channel once, in a `.c` file.
-- The listener is `display_lis`; the subscriber is `logger_sub` (a message subscriber is fine).
-  Both observe `sensor_chan`. `CONFIG_ZBUS=y` in `app/prj.conf`.
+- One channel whose message is a struct with the sample, defined once in a `.c` file with
+  `ZBUS_CHAN_DEFINE`. If other `.c` files use it, declare it with `ZBUS_CHAN_DECLARE()` in a header
+  that also defines the struct, and include that header in each of them.
+- A listener (`ZBUS_LISTENER_DEFINE`) for the display and a subscriber (`ZBUS_SUBSCRIBER_DEFINE`, or a
+  message subscriber) for the logger, both observers of the channel. `CONFIG_ZBUS=y` in
+  `app/prj.conf`.
+- The names of the channel, the struct, the observers and the files are up to you.
 - Log lines, with `t` from `k_uptime_get_32()`:
 
   ```
@@ -73,7 +76,7 @@ The listener's callback must not sleep, busy-wait or publish.
 
 ## L5 — Resource pressure (`l5-task1`, from `main`)
 
-- The queue is a message queue named `sample_q` (`K_MSGQ_DEFINE(sample_q, ...)`).
+- The queue is a message queue (`K_MSGQ_DEFINE`); its name is up to you.
 - `CONFIG_TASK_WDT=y`. The consumer adds a task watchdog channel and feeds it after each sample
   it processes.
 - When the consumer receives the sample with `seq` 20, it logs `[CONS] simulating stall` and

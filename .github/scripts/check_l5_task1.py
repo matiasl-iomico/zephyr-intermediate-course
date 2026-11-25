@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Check l5-task1: bounded queue, task watchdog and health check (see TASKS.md, L5).
 
-Static: CONFIG_TASK_WDT=y; the queue is a k_msgq named `sample_q`; the consumer
-(the thread that reads sample_q) feeds the task watchdog after real progress, and
-a task watchdog channel is added; a health thread reads the queue's occupancy.
+Static: CONFIG_TASK_WDT=y; the queue is a k_msgq (any name); the consumer (the
+thread that reads it) feeds the task watchdog after real progress, and a task
+watchdog channel is added; a health thread reads the queue's occupancy.
 Run: builds app/ for native_sim, runs it for 4 s and reads the fixed log lines
   [CONS] simulating stall          (when the consumer reaches seq 20 and sleeps 5 s)
   [HEALTH] occupancy=<used>/<capacity>        (every check; `WARN` in the line at 75% or more)
@@ -35,30 +35,37 @@ def static_checks(report, root):
     ok = report.check(app.kconfig(root, APP, "TASK_WDT") == "y", "`CONFIG_TASK_WDT=y`", path=f"{APP}/prj.conf",
                       fix=f"Enable the task watchdog: add `CONFIG_TASK_WDT=y` to `{APP}/prj.conf`.")
     code = "\n".join(app.strip_comments(t) for t in files.values())
-    ok &= report.check(re.search(r"\bK_MSGQ_DEFINE\s*\(\s*sample_q\s*,|\bk_msgq_init\s*\(\s*&\s*sample_q\b", code),
-                       "the queue is the `k_msgq` `sample_q`",
-                       **app.where(files, re.compile(r"\bsample_q\b"), re.compile(r"\bK_\w+_DEFINE\s*\(\s*\w*q\w*\s*,")),
-                       fix="Use a message queue named `sample_q`: `K_MSGQ_DEFINE(sample_q, sizeof(struct sample), 8, 4);`.")
+    # Any name: the queues are the app's message queues; the consumer is the thread that reads one.
+    queues = (re.findall(r"\bK_MSGQ_DEFINE\s*\(\s*(\w+)\s*,", code)
+              + re.findall(r"\bk_msgq_init\s*\(\s*&\s*(\w+)", code))
+    ok &= report.check(queues, "the queue is a `k_msgq`",
+                       **app.where(files, re.compile(r"\bK_\w+_DEFINE\s*\(\s*\w*q\w*\s*,"), "[CONS]"),
+                       fix="Use a message queue for the samples, e.g. `K_MSGQ_DEFINE(sample_q, sizeof(struct sample), 8, 4);`.")
     ok &= report.check(re.search(r"\btask_wdt_add\s*\(", code), "a task watchdog channel is added",
                        **app.where(files, re.compile(r"\btask_wdt_init\s*\("), re.compile(r"\bk_msgq_get\s*\(")),
                        fix="Add a task watchdog channel for the consumer with `task_wdt_add()`.")
+    reads = r"\bk_msgq_get\s*\(\s*&\s*(%s)\b" % "|".join(map(re.escape, queues)) if queues else None
     consumer = health = None
+    queue = queues[0] if queues else "sample_q"
     for t in app.threads(files):
         path, body, line = app.find_function(files, t["entry"])
-        if body and re.search(r"\bk_msgq_get\s*\(\s*&\s*sample_q\b", body):
-            consumer = (path, body, line)
-        if body and re.search(r"\bk_msgq_num_(?:used|free)_get\s*\(\s*&\s*sample_q\b", body):
+        m = reads and body and re.search(reads, body)
+        if m:
+            consumer, queue = (path, body, line), m.group(1)
+    for t in app.threads(files):
+        path, body, line = app.find_function(files, t["entry"])
+        if body and re.search(r"\bk_msgq_num_(?:used|free)_get\s*\(\s*&\s*%s\b" % re.escape(queue), body):
             health = (path, body, line)
-    if report.check(consumer, "a consumer thread reads `sample_q`", **app.where(files, re.compile(r"\bk_msgq_get\s*\(")),
-                    fix="Read the samples in the consumer thread with `k_msgq_get(&sample_q, ...)`."):
+    if report.check(consumer, "a consumer thread reads the queue", **app.where(files, re.compile(r"\bk_msgq_get\s*\(")),
+                    fix=f"Read the samples in the consumer thread with `k_msgq_get(&{queue}, ...)`."):
         ok &= report.check(re.search(r"\btask_wdt_feed\s*\(", consumer[1]), "the consumer feeds the watchdog",
                            path=consumer[0], line=consumer[2],
                            fix="Call `task_wdt_feed()` in the consumer's loop after it processes a sample, so a stall "
                                "stops the feeding.")
     else:
         ok = False
-    ok &= report.check(health, "a health thread reads the queue's occupancy", **app.where(files, "[HEALTH]"),
-                       fix="Add a health-check thread that reads `k_msgq_num_used_get(&sample_q)` periodically.")
+    ok &= report.check(health, f"a health thread reads the occupancy of `{queue}`", **app.where(files, "[HEALTH]"),
+                       fix=f"Add a health-check thread that reads `k_msgq_num_used_get(&{queue})` periodically.")
     return bool(ok)
 
 
@@ -67,7 +74,7 @@ def run_checks(report, root, work):
     if not app.check_build(report, root, APP, build_dir):
         return
     files = app.sources(root, APP)
-    consumer = app.where(files, "simulating stall", "[CONS]", re.compile(r"\bk_msgq_get\s*\(\s*&\s*sample_q\b"))
+    consumer = app.where(files, "simulating stall", "[CONS]", re.compile(r"\bk_msgq_get\s*\("))
     health = app.where(files, "[HEALTH]", re.compile(r"\bk_msgq_num_(?:used|free)_get\s*\("))
     out, _ = app.run_native(build_dir, SECONDS)
     stall = [i for i, ln in app.tagged(out, "CONS") if "simulating stall" in ln]

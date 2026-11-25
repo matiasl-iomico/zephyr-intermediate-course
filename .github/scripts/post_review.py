@@ -20,7 +20,8 @@ with secrets). It never checks out or runs anything from the PR:
    are closed. A PR left for an instructor gets a review request for the
    instructors in MANUAL_REVIEWER (one or more logins, separated by commas or spaces); real problems (a broken
    check run) also mention them in the review. A check run that left no result
-   is our problem, not the student's: the review says so and asks for nothing.
+   (or a checker error: a missing tool, a step that didn't finish) is our problem, not the student's:
+   the review says so and asks for nothing.
 
     python3 post_review.py --artifacts DIR            # in the workflow
     python3 post_review.py --artifacts DIR --pr 12 --dry-run   # print, post nothing
@@ -171,10 +172,11 @@ def decide(task, result, result_problem):
                 "code. You don't need to do anything: an instructor will run them again and the review will "
                 "appear here.", [], result_problem, False)
     status = result["status"]
-    if status == "error":
+    if status == "error":  # the checker stopped on a CI problem (a missing tool, a run that didn't finish)
         msg = (result.get("error") or {}).get("message", "The checks could not evaluate this commit.")
-        return ("under_review", "The checks could not evaluate this commit. An instructor will look at it.",
-                [], msg, False)
+        return ("retry", "The checks couldn't run on this commit because of a problem on our side, not in your "
+                "code. You don't need to do anything: an instructor will run them again and the review will "
+                "appear here.", [], msg, False)
     if status == "changes_needed":
         return ("changes_needed", "The automatic checks found something to change.",
                 result.get("changes") or [], "", False)
@@ -219,7 +221,7 @@ def compose(task, sha, status, summary, changes, reason, result, mention, run_ur
     if status == "retry" and mention:
         who = " ".join(f"@{m}" for m in mention)
         run = f" ([check run]({run_url}))" if run_url else ""
-        lines += [f"{who}, the check run left no result{run}: {reason or 'see the run.'} Fix the cause on the "
+        lines += [f"{who}, the checks couldn't run{run}: {reason or 'see the run.'} Fix the cause on the "
                   "target branch, then re-run the failed jobs; this commit gets its review then.", ""]
     if result:
         checks = result.get("checks") or []

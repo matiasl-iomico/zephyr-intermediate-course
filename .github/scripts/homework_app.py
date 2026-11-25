@@ -270,14 +270,27 @@ def build_location(log, src_dir, rel_dir):
     return path, line
 
 
+def missing_tool(log):
+    """The build tool the runner lacks (`gperf` for GPERF-NOTFOUND, or a `... not found` command), or None."""
+    log = ANSI.sub("", log or "")
+    m = re.search(r"\b([A-Z][A-Z0-9_]*)-NOTFOUND\b", log) or re.search(r"^/bin/sh: \d+: (\S+): not found$", log, re.M)
+    return m.group(1).lower() if m else None
+
+
 def check_build(report, root, rel_dir, build_dir, label="the app builds for `native_sim`", board="native_sim",
                 cmake_args=(), src_dir=None):
     """Build the app in rel_dir (or in src_dir, a modified copy of it) and record the result.
 
-    On a failure the check names the first error and the student's file and line it is in.
+    On a failure the check names the first error and the student's file and line it is in. A tool
+    missing on the runner is CI's problem, not the student's: the checker stops with an error.
     """
     src = src_dir or os.path.join(root, rel_dir)
     ok, log = build(src, build_dir, board=board, cmake_args=cmake_args)
+    tool = None if ok else missing_tool(log)
+    if tool:
+        report.fail_hard(f"CI couldn't build the app: `{tool}` is missing on the runner (install it in "
+                         "`.github/actions/zephyr-setup`).")
+        return False
     path, line = build_location(log, src, rel_dir)
     error = build_error(log)
     for prefix in {os.path.realpath(src), os.path.abspath(src)}:  # the runner's paths -> repository paths

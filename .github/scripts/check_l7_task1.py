@@ -61,6 +61,7 @@ def static_checks(report, root):
                             "the same folder, as in the `l7-homework` starter."):
         return None
     prefix = f"{proj}/" if proj else ""
+    report.where = f"{prefix}src/main.c"
     ok = report.check(app.kconfig(root, proj, "USERSPACE") == "y", "`CONFIG_USERSPACE=y`", path=f"{prefix}prj.conf",
                       fix=f"Enable user mode: add `CONFIG_USERSPACE=y` to `{prefix}prj.conf`. Without it `K_USER` has "
                           "no effect.")
@@ -79,6 +80,11 @@ def static_checks(report, root):
             body, _ = app.function_body(code, m.group(1))
             if body and re.search(r"\bparse_command\s*\(", body) and m.group(1) != "parse_command":
                 callers.append(m.group(1))
+    parser_thread = next(({"path": t["path"], "line": t["line"]} for t in app.threads(files) if t["entry"] in callers),
+                         None)
+    if parser_thread is None and callers:
+        path, _, line = app.find_function(files, callers[0])
+        parser_thread = {"path": path, "line": line}
     user = False
     for t in app.threads(files):
         if t["entry"] in callers and "K_USER" in t["options"]:
@@ -92,18 +98,22 @@ def static_checks(report, root):
             body, _ = app.function_body(code, fn)
             if body and re.search(r"\bk_thread_user_mode_enter\s*\(", body):
                 user = True
-    ok &= report.check(user, "the parser runs in a user-mode thread", path=f"{prefix}src/main.c",
+    ok &= report.check(user, "the parser runs in a user-mode thread", **(parser_thread or {}),
                        fix="Create the parser thread with `K_USER` in `k_thread_create()`'s options (or call "
                            "`k_thread_user_mode_enter()` before parsing).")
-    all_code = "\n".join(app.strip_comments(t) for t in files.values())
-    leaks = []
-    for args, line, _ in app.calls(all_code, "K_MEM_PARTITION_DEFINE"):
-        joined = ", ".join(args)
-        if re.search(r"device_key|credentials|_image_ram|SRAM|RAM_ADDR|0x2[0-9a-fA-F]{7}|0x3[0-9a-fA-F]{7}", joined):
-            leaks.append(args[0] if args else "?")
-    if re.search(r"\bK_APP_(?:B|D)MEM\s*\([^)]*\)\s*[^;]*\bdevice_key\b", all_code):
-        leaks.append("device_key")
-    ok &= report.check(not leaks, "no memory partition gives the parser the key", path=f"{prefix}src/main.c",
+    leaks, leak_at = [], {}
+    for path, text in files.items():
+        code = app.strip_comments(text)
+        for args, line, _ in app.calls(code, "K_MEM_PARTITION_DEFINE"):
+            joined = ", ".join(args)
+            if re.search(r"device_key|credentials|_image_ram|SRAM|RAM_ADDR|0x2[0-9a-fA-F]{7}|0x3[0-9a-fA-F]{7}", joined):
+                leaks.append(args[0] if args else "?")
+                leak_at = leak_at or {"path": path, "line": line}
+        m = re.search(r"\bK_APP_(?:B|D)MEM\s*\([^)]*\)\s*[^;]*\bdevice_key\b", code)
+        if m:
+            leaks.append("device_key")
+            leak_at = leak_at or {"path": path, "line": app.line_of(code, m.start())}
+    ok &= report.check(not leaks, "no memory partition gives the parser the key", **leak_at,
                        fix=f"Don't give the parser's thread a partition that covers the key or all RAM "
                            f"({', '.join(f'`{x}`' for x in leaks)}). The parser needs no extra grant.")
     return proj if ok else None
@@ -111,9 +121,8 @@ def static_checks(report, root):
 
 def run_checks(report, root, proj, work, cmake_args=()):
     build_dir = os.path.join(work, "build")
-    ok, log = app.build(os.path.join(root, proj), build_dir, board=BOARD, cmake_args=cmake_args)
-    if not report.check(ok, f"the project builds for `{BOARD}`",
-                        fix=f"Fix the build: {app.build_error(log)}. Try `west build -b {BOARD} {proj or '.'}`."):
+    if not app.check_build(report, root, proj, build_dir, label=f"the project builds for `{BOARD}`", board=BOARD,
+                           cmake_args=cmake_args):
         return
     try:
         p = subprocess.run(["west", "build", "-d", build_dir, "-t", "run"], stdout=subprocess.PIPE,

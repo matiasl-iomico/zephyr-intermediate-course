@@ -22,9 +22,11 @@ MAX_CHANGES = 5  # same cap as the feedback emails
 
 
 class Report:
-    def __init__(self, task, title):
+    def __init__(self, task, title, where=None):
+        """`where`: the file to name for a failed check that gives no path of its own (the task's main file)."""
         self.task = task
         self.title = title
+        self.where = where
         self.checks = []  # dicts: ok, label, message, path, line
         self.notes = []
         self.error = None
@@ -33,12 +35,13 @@ class Report:
         """Record one requirement. `fix` is the imperative message shown when it fails."""
         ok = bool(ok)
         self.checks.append({"ok": ok, "label": label, "message": fix or label,
-                            "path": path, "line": line})
+                            "path": path or self.where, "line": line if path else None})
         return ok
 
     def unsure(self, label, why, path=None, line=None):
         """A requirement the checker can't decide from the code: an instructor looks. Never fails the task."""
-        self.checks.append({"ok": None, "label": label, "message": why, "path": path, "line": line})
+        self.checks.append({"ok": None, "label": label, "message": why, "path": path or self.where,
+                            "line": line if path else None})
 
     def note(self, message):
         """Informational remark; never fails the task."""

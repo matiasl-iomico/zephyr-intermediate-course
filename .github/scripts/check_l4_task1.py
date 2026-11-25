@@ -24,6 +24,7 @@ from homework_report import Report
 import homework_app as app
 
 APP = "app"
+MAIN = f"{APP}/src/main.c"
 HEADER = f"{APP}/src/sensor_msg.h"
 SECONDS = 2
 BLOCKING = ("k_msleep", "k_sleep", "k_usleep", "k_busy_wait", "zbus_chan_pub", "zbus_chan_read", "k_yield")
@@ -43,7 +44,8 @@ def static_checks(report, root):
                        fix=f"Declare the channel in `{HEADER}` with `ZBUS_CHAN_DECLARE(sensor_chan);`.")
     code = {p: app.strip_comments(t) for p, t in files.items() if p.endswith(".c")}
     chan = [(p, a, ln) for p, c in code.items() for a, ln, _ in app.calls(c, "ZBUS_CHAN_DEFINE") if a and a[0] == "sensor_chan"]
-    ok &= report.check(len(chan) == 1, "`sensor_chan` is defined once", path=chan[0][0] if chan else None,
+    ok &= report.check(len(chan) == 1, "`sensor_chan` is defined once", path=chan[-1][0] if chan else None,
+                       line=chan[-1][2] if chan else None,
                        fix="Define the channel once, in a `.c` file: `ZBUS_CHAN_DEFINE(sensor_chan, struct sensor_msg, "
                            "...)`." if not chan else "Define `sensor_chan` in one `.c` file only; the others include "
                            "`sensor_msg.h`.")
@@ -53,11 +55,11 @@ def static_checks(report, root):
                      fix="Make `struct sensor_msg` the channel's message type in `ZBUS_CHAN_DEFINE`.")
     listener = [(p, a, ln) for p, c in code.items() for a, ln, _ in app.calls(c, "ZBUS_LISTENER_DEFINE")
                 if a and a[0] == "display_lis"]
-    ok &= report.check(listener, "`display_lis` is a listener",
+    ok &= report.check(listener, "`display_lis` is a listener", **app.where(files, re.compile(r"\bdisplay_lis\b")),
                        fix="Define the display observer as a listener: `ZBUS_LISTENER_DEFINE(display_lis, display_cb);`.")
     msg_sub = any(a and a[0] == "logger_sub" for c in code.values() for a, _, _ in app.calls(c, "ZBUS_MSG_SUBSCRIBER_DEFINE"))
     sub = msg_sub or any(a and a[0] == "logger_sub" for c in code.values() for a, _, _ in app.calls(c, "ZBUS_SUBSCRIBER_DEFINE"))
-    ok &= report.check(sub, "`logger_sub` is a subscriber",
+    ok &= report.check(sub, "`logger_sub` is a subscriber", **app.where(files, re.compile(r"\blogger_sub\b")),
                        fix="Define the logger observer as a subscriber: `ZBUS_SUBSCRIBER_DEFINE(logger_sub, 4);`.")
     if msg_sub:
         ok &= report.check(app.kconfig(root, APP, "ZBUS_MSG_SUBSCRIBER") == "y", "`CONFIG_ZBUS_MSG_SUBSCRIBER=y`",
@@ -69,6 +71,7 @@ def static_checks(report, root):
         added = re.search(r"\bZBUS_CHAN_ADD_OBS\s*\(\s*sensor_chan\s*,\s*%s\b|\bzbus_chan_add_obs\s*\(\s*&\s*sensor_chan\s*,"
                           r"\s*&\s*%s\b" % (obs, obs), all_code)
         ok &= report.check(in_chan or added, f"`{obs}` observes `sensor_chan`", path=chan[0][0] if chan else None,
+                           line=chan[0][2] if chan else None,
                            fix=f"Add `{obs}` to the channel's observers: `ZBUS_OBSERVERS(display_lis, logger_sub)` in "
                                "`ZBUS_CHAN_DEFINE`.")
     if listener:
@@ -87,33 +90,44 @@ def entries(out, tag):
     return [(i, app.field(ln, "seq"), app.field(ln, "t")) for i, ln in app.tagged(out, tag)]
 
 
+def listener_at(files):
+    """Keyword path/line of the listener's callback (or of display_lis), for Report.check."""
+    for path, text in files.items():
+        for args, line, _ in app.calls(app.strip_comments(text), "ZBUS_LISTENER_DEFINE"):
+            if args and args[0] == "display_lis" and len(args) > 1:
+                cb_path, _, cb_line = app.find_function(files, args[1])
+                return {"path": cb_path or path, "line": cb_line or line}
+    return app.where(files, "[DISPLAY]")
+
+
 def run_checks(report, root, work):
     build_dir = os.path.join(work, "build")
-    ok, log = app.build(os.path.join(root, APP), build_dir)
-    if not report.check(ok, "the app builds for `native_sim`",
-                        fix=f"Fix the build: {app.build_error(log)}. Try `west build -b native_sim {APP}`."):
+    if not app.check_build(report, root, APP, build_dir):
         return
+    files = app.sources(root, APP)
     out, _ = app.run_native(build_dir, SECONDS)
     pub, disp, logger = entries(out, "PUB"), entries(out, "DISPLAY"), entries(out, "LOGGER")
     for tag, items in (("PUB", pub), ("DISPLAY", disp), ("LOGGER", logger)):
         if not report.check(items and all(s is not None and t is not None for _, s, t in items),
-                            f"`[{tag}] seq=<n> t=<ms>` lines are printed",
+                            f"`[{tag}] seq=<n> t=<ms>` lines are printed", **app.where(files, f"[{tag}]"),
                             fix=f"Print `[{tag}] seq=<n> t=<ms>` (TASKS.md, L4); `t` is `k_uptime_get_32()`."):
             return
     gaps = [b[2] - a[2] for a, b in zip(pub, pub[1:])]
     period = statistics.median(gaps) if gaps else 0
     report.check(len(pub) >= SECONDS * 1000 // 120 and 90 <= period <= 120,
                  f"a sample is published about every 100 ms ({len(pub)} in {SECONDS} s)",
+                 **app.where(files, "[PUB]", re.compile(r"\bzbus_chan_pub\s*\(")),
                  fix=f"Publish a sample every 100 ms; the run published {len(pub)} in {SECONDS} s"
                      + (f", {period:.0f} ms apart." if gaps else "."))
     shown = {s: t for _, s, t in disp}
     missing = [s for _, s, t in pub if s not in shown or not 0 <= shown[s] - t <= 1]
-    report.check(not missing, "the display shows each sample as it is published",
+    report.check(not missing, "the display shows each sample as it is published", **listener_at(files),
                  fix=f"Sample {missing[0] if missing else ''} has no `[DISPLAY]` line in the same instant as its "
                      "`[PUB]`. The listener runs inside the publish: log `[DISPLAY]` from its callback.")
     pub_t = {s: t for _, s, t in pub}
     wrong = [s for _, s, t in logger if s not in pub_t or t < pub_t[s]]
     report.check(not wrong, "the logger handles published samples after they are published",
+                 **app.where(files, "[LOGGER]", re.compile(r"\bzbus_sub_wait\w*\s*\(")),
                  fix="`[LOGGER]` printed a sample before it was published or one that never was. Read the channel "
                      "in the subscriber's thread after `zbus_sub_wait()` returns.")
 
@@ -125,7 +139,7 @@ def main():
     ap.add_argument("--no-run", action="store_true", help="only read the sources")
     ap.add_argument("--json", help="write the result JSON here")
     args = ap.parse_args()
-    report = Report("l4-task1", "zbus listener and subscriber")
+    report = Report("l4-task1", "zbus listener and subscriber", where=MAIN)
     if static_checks(report, os.path.abspath(args.root)) and not args.no_run:
         run_checks(report, os.path.abspath(args.root), os.path.abspath(args.work))
     return report.finish(args.json)

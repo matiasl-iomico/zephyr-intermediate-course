@@ -60,9 +60,9 @@ runs:
       run: |
         west init -l --mf "$MANIFEST" zephyr-course
         west update --narrow -o=--depth=1 $PROJECTS
-        west zephyr-export
         echo "ZEPHYR_BASE=$PWD/$ZEPHYR_PATH" >> "$GITHUB_ENV"
 
+    # Before `west zephyr-export`: Zephyr's west commands import these packages (jsonschema, ...).
     - name: Install Zephyr Python requirements
       shell: bash
       working-directory: ${{ inputs.workspace }}
@@ -73,6 +73,7 @@ runs:
         args=()
         for r in $REQUIREMENTS; do args+=(-r "$ZEPHYR_PATH/scripts/requirements-$r.txt"); done
         pip install "${args[@]}"
+        west zephyr-export
 
     - name: Find the SDK version
       id: sdk

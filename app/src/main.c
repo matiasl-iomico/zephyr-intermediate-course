@@ -1,34 +1,32 @@
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
 
-LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
+#define STACK 1024
 
-#define STACK_SIZE 1024
-
-#define PRIO_A 5
-#define PRIO_B 5
-
-void thread_a_fn(void *p1, void *p2, void *p3)
+/* Same body for the three preemptible threads. */
+static void worker(void *name, void *period_ms, void *unused)
 {
-    while (1) {
-        k_msleep(200);
-    }
+	ARG_UNUSED(unused);
+
+	for (uint32_t n = 0;; n++) {
+		printk("[%s] tick=%u t=%u\n", (const char *)name, n, k_uptime_get_32());
+		k_msleep((int)(intptr_t)period_ms);
+	}
 }
 
-void thread_b_fn(void *p1, void *p2, void *p3)
+K_THREAD_DEFINE(t7, STACK, worker, "T7", (void *)150, NULL, 7, 0, 0);
+K_THREAD_DEFINE(t5, STACK, worker, "T5", (void *)200, NULL, 5, 0, 0);
+K_THREAD_DEFINE(t3, STACK, worker, "T3", (void *)100, NULL, 3, 0, 0);
+
+/* Cooperative thread: 5 busy iterations, then k_yield(). */
+static void coop_fn(void *p1, void *p2, void *p3)
 {
-    while (1) {
-        k_msleep(300);
-    }
+	for (int i = 0; i < 5; i++) {
+		printk("[COOP] iter=%d t=%u\n", i, k_uptime_get_32());
+		k_busy_wait(10000); /* 10 ms of busy work */
+	}
+	printk("[COOP] yield t=%u\n", k_uptime_get_32());
+	k_yield();
+	printk("[COOP] done t=%u\n", k_uptime_get_32());
 }
 
-K_THREAD_DEFINE(thread_a, STACK_SIZE, thread_a_fn,
-                NULL, NULL, NULL, PRIO_A, 0, 0);
-K_THREAD_DEFINE(thread_b, STACK_SIZE, thread_b_fn,
-                NULL, NULL, NULL, PRIO_B, 0, 0);
-
-int main(void)
-{
-    return 0;
-}
-
+K_THREAD_DEFINE(coop, STACK, coop_fn, NULL, NULL, NULL, -1, 0, 500);

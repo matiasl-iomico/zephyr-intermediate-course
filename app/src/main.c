@@ -13,7 +13,7 @@ static void worker(void *name, void *period_ms, void *unused)
 	}
 }
 
-K_THREAD_DEFINE(t7, STACK, worker, "T7", (void *)150, NULL, 7, 0, 0);
+K_THREAD_DEFINE(t7, STACK, worker, "T7", (void *)300, NULL, 7, 0, 0);
 K_THREAD_DEFINE(t5, STACK, worker, "T5", (void *)200, NULL, 5, 0, 0);
 K_THREAD_DEFINE(t3, STACK, worker, "T3", (void *)100, NULL, 3, 0, 0);
 

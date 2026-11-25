@@ -18,7 +18,7 @@ with secrets). It never checks out or runs anything from the PR:
 4. Posts one review (event COMMENT) with the status, the changes and the
    checklist, inline comments on lines in the diff, and labels. Approved PRs
    are closed. A PR left for an instructor gets a review request for the
-   instructors in MANUAL_REVIEWER (comma-separated); real problems (a broken
+   instructors in MANUAL_REVIEWER (one or more logins, separated by commas or spaces); real problems (a broken
    check run) also mention them in the review. A check run that left no result
    is our problem, not the student's: the review says so and asks for nothing.
 
@@ -298,10 +298,12 @@ def request_review(repo, pr, instructors, dry_run):
     if dry_run:
         log(f"[dry-run] request review from {who}")
         return
-    try:
-        gh.post(f"repos/{repo}/pulls/{pr['number']}/requested_reviewers", {"reviewers": who})
-    except gh.GitHubError as e:  # not a collaborator, or already reviewing: the label still marks it
-        log(f"Couldn't request a review from {who}: {e}")
+    # One request per instructor: GitHub rejects the whole list when one of them can't review this repository.
+    for login in who:
+        try:
+            gh.post(f"repos/{repo}/pulls/{pr['number']}/requested_reviewers", {"reviewers": [login]})
+        except gh.GitHubError as e:  # not a collaborator, or already reviewing: the label and mention still mark it
+            log(f"Couldn't request a review from {login}: {e}")
 
 
 # ---------------------------------------------------------------- main
@@ -316,8 +318,9 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="print the review; post nothing")
     args = ap.parse_args()
 
-    instructors = [i.strip().lstrip("@") for i in (os.environ.get("MANUAL_REVIEWER") or "").split(",")
-                   if i.strip()]
+    # "matiflp, carlassaraf", "@matiflp @carlassaraf" or one per line: commas, spaces and newlines all separate.
+    instructors = list(dict.fromkeys(i.lstrip("@") for i in re.split(r"[,\s]+", os.environ.get("MANUAL_REVIEWER") or "")
+                                     if i.lstrip("@")))
     close_approved = os.environ.get("CLOSE_APPROVED", "true") != "false"
 
     run = {}

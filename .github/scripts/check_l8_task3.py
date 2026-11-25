@@ -24,7 +24,7 @@ import re
 import sys
 
 from homework_report import Report
-from check_l8_task0 import common_args
+from check_l8_task0 import ERRORS, common_args
 from check_l8_task2 import all_checks
 
 MODULE_DIR = "app/modules/temp_alarm"
@@ -206,7 +206,7 @@ def committed_checks(report, root, twister_out):
 def main():
     args = common_args(__doc__.splitlines()[0]).parse_args()
     root = os.path.abspath(args.root)
-    report = Report("l8-task3", "temp_alarm coverage")
+    report = Report("l8-task3", "temp_alarm coverage", where=ERRORS)
     if all_checks(report, root, args, upto=3):
         coverage_checks(report, args.twister_out)
         committed_checks(report, root, args.twister_out)

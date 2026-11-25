@@ -31,7 +31,7 @@ static void sensor_sim_fn(void *p1, void *p2, void *p3)
 		total_events++;
 		LOG_INF("[SENSOR] event %d  tick=%u", i, k_uptime_get_32());
 
-		int ret = 0;
+		int ret = k_work_submit(&sensor_work);
 
 		if (ret < 0) {
 			LOG_ERR("submit failed: %d", ret);

@@ -8,7 +8,6 @@ static void display_cb(const struct zbus_channel *chan)
 	const struct sensor_msg *m = zbus_chan_const_msg(chan);
 
 	printk("[DISPLAY] seq=%u t=%u\n", m->seq, k_uptime_get_32());
-k_msleep(20);
 }
 
 ZBUS_LISTENER_DEFINE(display_lis, display_cb);

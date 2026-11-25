@@ -71,7 +71,7 @@ static void control_fn(void *p1, void *p2, void *p3)
         uint32_t latency = k_uptime_get_32() - event.ready_ms;
 
         if (latency > DEADLINE_MS) {
-            if (event.seq % 2) { misses++; }
+            misses++; /* always counted */
             LOG_WRN_RATELIMIT("[CONTROL] deadline miss seq=%u latency=%u ms", event.seq, latency);
         }
         LOG_INF("[LAT] seq=%u latency_ms=%u misses=%u", event.seq, latency, misses);

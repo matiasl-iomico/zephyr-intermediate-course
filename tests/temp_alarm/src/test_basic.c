@@ -96,7 +96,7 @@ ZTEST(temp_alarm_check, test_at_threshold)
 	 */
 	struct temp_alarm_status status;
 
-	sensor_fake_set_temperature(29);
+	sensor_fake_set_temperature(30);
 	zassert_equal(temp_alarm_set_threshold(30), 0, "set_threshold must succeed");
 
 	zassert_ok(temp_alarm_check(), "check must succeed");

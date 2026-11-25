@@ -1,34 +1,44 @@
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
+#include <zephyr/zbus/zbus.h>
+#include "reading.h"
 
-LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
-
-#define STACK_SIZE 1024
-
-#define PRIO_A 5
-#define PRIO_B 5
-
-void thread_a_fn(void *p1, void *p2, void *p3)
+/* Listener: runs inside zbus_chan_pub(), so keep it short. */
+static void on_reading(const struct zbus_channel *chan)
 {
-    while (1) {
-        k_msleep(200);
-    }
+	const struct reading *m = zbus_chan_const_msg(chan);
+
+	printk("[DISPLAY] seq=%u t=%u\n", m->seq, k_uptime_get_32());
 }
 
-void thread_b_fn(void *p1, void *p2, void *p3)
+ZBUS_LISTENER_DEFINE(screen_obs, on_reading);
+ZBUS_SUBSCRIBER_DEFINE(log_obs, 4);
+
+ZBUS_CHAN_DEFINE(temp_ch, struct reading, NULL, NULL,
+		 ZBUS_OBSERVERS(screen_obs, log_obs), ZBUS_MSG_INIT(0));
+
+/* Subscriber: slow work in its own thread. */
+static void logger_fn(void *p1, void *p2, void *p3)
 {
-    while (1) {
-        k_msleep(300);
-    }
+	const struct zbus_channel *chan;
+
+	while (zbus_sub_wait(&log_obs, &chan, K_FOREVER) == 0) {
+		struct reading m;
+
+		zbus_chan_read(chan, &m, K_MSEC(10));
+		k_msleep(50); /* pretend logging is slow */
+		printk("[LOGGER] seq=%u t=%u\n", m.seq, k_uptime_get_32());
+	}
 }
+K_THREAD_DEFINE(logger, 1024, logger_fn, NULL, NULL, NULL, 7, 0, 0);
 
-K_THREAD_DEFINE(thread_a, STACK_SIZE, thread_a_fn,
-                NULL, NULL, NULL, PRIO_A, 0, 0);
-K_THREAD_DEFINE(thread_b, STACK_SIZE, thread_b_fn,
-                NULL, NULL, NULL, PRIO_B, 0, 0);
-
-int main(void)
+static void publisher_fn(void *p1, void *p2, void *p3)
 {
-    return 0;
-}
+	for (uint32_t seq = 0;; seq++) {
+		k_msleep(100);
+		struct reading m = { .seq = seq, .temp_mc = 21000 + (seq % 10) * 100 };
 
+		printk("[PUB] seq=%u t=%u\n", seq, k_uptime_get_32());
+		zbus_chan_pub(&temp_ch, &m, K_MSEC(10));
+	}
+}
+K_THREAD_DEFINE(publisher, 1024, publisher_fn, NULL, NULL, NULL, 5, 0, 0);

@@ -1,34 +1,39 @@
 #include <zephyr/kernel.h>
-#include <zephyr/logging/log.h>
+#include "counter.h"
 
-LOG_MODULE_REGISTER(demo, LOG_LEVEL_DBG);
+#define N 100000
 
-#define STACK_SIZE 1024
+K_THREAD_STACK_ARRAY_DEFINE(stacks, 2, 1024);
+static struct k_thread threads[2];
 
-#define PRIO_A 5
-#define PRIO_B 5
-
-void thread_a_fn(void *p1, void *p2, void *p3)
+static void worker(void *use_mutex, void *p2, void *p3)
 {
-    while (1) {
-        k_msleep(200);
-    }
+	for (int i = 0; i < N; i++) {
+		if (use_mutex) {
+			counter_increment();
+		} else {
+			counter_increment_unsafe();
+		}
+	}
 }
 
-void thread_b_fn(void *p1, void *p2, void *p3)
+static void run(const char *mode, bool use_mutex)
 {
-    while (1) {
-        k_msleep(300);
-    }
+	counter_reset();
+	for (int i = 0; i < 2; i++) {
+		k_thread_create(&threads[i], stacks[i], K_THREAD_STACK_SIZEOF(stacks[i]),
+				worker, (void *)use_mutex, NULL, NULL, 5, 0, K_NO_WAIT);
+	}
+	/* Read the result only after both workers finished. */
+	for (int i = 0; i < 2; i++) {
+		k_thread_join(&threads[i], K_FOREVER);
+	}
+	printk("[RESULT] mode=%s total=%d expected=%d\n", mode, counter_get(), 2 * N);
 }
-
-K_THREAD_DEFINE(thread_a, STACK_SIZE, thread_a_fn,
-                NULL, NULL, NULL, PRIO_A, 0, 0);
-K_THREAD_DEFINE(thread_b, STACK_SIZE, thread_b_fn,
-                NULL, NULL, NULL, PRIO_B, 0, 0);
 
 int main(void)
 {
-    return 0;
+	run("unsafe", false);
+	run("mutex", true);
+	return 0;
 }
-

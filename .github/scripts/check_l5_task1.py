@@ -36,9 +36,11 @@ def static_checks(report, root):
                       fix=f"Enable the task watchdog: add `CONFIG_TASK_WDT=y` to `{APP}/prj.conf`.")
     code = "\n".join(app.strip_comments(t) for t in files.values())
     ok &= report.check(re.search(r"\bK_MSGQ_DEFINE\s*\(\s*sample_q\s*,|\bk_msgq_init\s*\(\s*&\s*sample_q\b", code),
-                       "the queue is the `k_msgq` `sample_q`", path=MAIN,
+                       "the queue is the `k_msgq` `sample_q`",
+                       **app.where(files, re.compile(r"\bsample_q\b"), re.compile(r"\bK_\w+_DEFINE\s*\(\s*\w*q\w*\s*,")),
                        fix="Use a message queue named `sample_q`: `K_MSGQ_DEFINE(sample_q, sizeof(struct sample), 8, 4);`.")
-    ok &= report.check(re.search(r"\btask_wdt_add\s*\(", code), "a task watchdog channel is added", path=MAIN,
+    ok &= report.check(re.search(r"\btask_wdt_add\s*\(", code), "a task watchdog channel is added",
+                       **app.where(files, re.compile(r"\btask_wdt_init\s*\("), re.compile(r"\bk_msgq_get\s*\(")),
                        fix="Add a task watchdog channel for the consumer with `task_wdt_add()`.")
     consumer = health = None
     for t in app.threads(files):
@@ -47,7 +49,7 @@ def static_checks(report, root):
             consumer = (path, body, line)
         if body and re.search(r"\bk_msgq_num_(?:used|free)_get\s*\(\s*&\s*sample_q\b", body):
             health = (path, body, line)
-    if report.check(consumer, "a consumer thread reads `sample_q`", path=MAIN,
+    if report.check(consumer, "a consumer thread reads `sample_q`", **app.where(files, re.compile(r"\bk_msgq_get\s*\(")),
                     fix="Read the samples in the consumer thread with `k_msgq_get(&sample_q, ...)`."):
         ok &= report.check(re.search(r"\btask_wdt_feed\s*\(", consumer[1]), "the consumer feeds the watchdog",
                            path=consumer[0], line=consumer[2],
@@ -55,20 +57,21 @@ def static_checks(report, root):
                                "stops the feeding.")
     else:
         ok = False
-    ok &= report.check(health, "a health thread reads the queue's occupancy", path=MAIN,
+    ok &= report.check(health, "a health thread reads the queue's occupancy", **app.where(files, "[HEALTH]"),
                        fix="Add a health-check thread that reads `k_msgq_num_used_get(&sample_q)` periodically.")
     return bool(ok)
 
 
 def run_checks(report, root, work):
     build_dir = os.path.join(work, "build")
-    ok, log = app.build(os.path.join(root, APP), build_dir)
-    if not report.check(ok, "the app builds for `native_sim`",
-                        fix=f"Fix the build: {app.build_error(log)}. Try `west build -b native_sim {APP}`."):
+    if not app.check_build(report, root, APP, build_dir):
         return
+    files = app.sources(root, APP)
+    consumer = app.where(files, "simulating stall", "[CONS]", re.compile(r"\bk_msgq_get\s*\(\s*&\s*sample_q\b"))
+    health = app.where(files, "[HEALTH]", re.compile(r"\bk_msgq_num_(?:used|free)_get\s*\("))
     out, _ = app.run_native(build_dir, SECONDS)
     stall = [i for i, ln in app.tagged(out, "CONS") if "simulating stall" in ln]
-    if not report.check(stall, "the consumer stalls (`[CONS] simulating stall`)",
+    if not report.check(stall, "the consumer stalls (`[CONS] simulating stall`)", **consumer,
                         fix="When the consumer receives seq 20, print `[CONS] simulating stall` and sleep 5 s "
                             "(TASKS.md, L5)."):
         return
@@ -77,22 +80,24 @@ def run_checks(report, root, work):
         m = re.search(r"occupancy\s*=\s*(\d+)\s*/\s*(\d+)", ln)
         if m:
             samples.append((int(m.group(1)), int(m.group(2)), "WARN" in ln))
-    if not report.check(samples, "the health check prints the occupancy",
+    if not report.check(samples, "the health check prints the occupancy", **health,
                         fix="Print `[HEALTH] occupancy=<used>/<capacity>` on every check, with `WARN` when the queue "
                             "is at 75% or more (TASKS.md, L5)."):
         return
-    report.check(any(w for _, _, w in samples), "the health check warns while the consumer is stalled",
+    report.check(any(w for _, _, w in samples), "the health check warns while the consumer is stalled", **health,
                  fix="Print `[HEALTH] WARN occupancy=<used>/<capacity>` when the queue reaches 75% of its capacity.")
     missed = [(u, c) for u, c, w in samples if u * 100 >= 75 * c and not w]
     early = [(u, c) for u, c, w in samples if u * 100 < 75 * c and w]
-    report.check(not missed, "every check at 75% or more warns",
+    report.check(not missed, "every check at 75% or more warns", **health,
                  fix="The health check printed occupancy %d/%d without `WARN`. Warn when `used * 100 >= 75 * capacity`."
                      % missed[0] if missed else None)
-    report.check(not early, "no warning below 75%",
+    report.check(not early, "no warning below 75%", **health,
                  fix="The health check warned at %d/%d, below 75%%. Warn when `used * 100 >= 75 * capacity`."
                      % early[0] if early else None)
     wdt = [i for i, _ in app.tagged(out, "WDT")]
     report.check(wdt and wdt[0] > stall[0], "the watchdog fires after the stall begins",
+                 **(app.where(files, re.compile(r"\btask_wdt_feed\s*\(")) if wdt else
+                    app.where(files, "[WDT]", re.compile(r"\btask_wdt_add\s*\("))),
                  fix=("The watchdog fired before the stall: feed it after every processed sample, with a timeout "
                       "longer than the consumer's normal gap (e.g. 1000 ms).") if wdt else
                      "Print `[WDT] ...` from the task watchdog callback, and use a timeout shorter than the 5 s stall.")
@@ -105,7 +110,7 @@ def main():
     ap.add_argument("--no-run", action="store_true", help="only read the sources")
     ap.add_argument("--json", help="write the result JSON here")
     args = ap.parse_args()
-    report = Report("l5-task1", "Queue, watchdog and health check")
+    report = Report("l5-task1", "Queue, watchdog and health check", where=MAIN)
     if static_checks(report, os.path.abspath(args.root)) and not args.no_run:
         run_checks(report, os.path.abspath(args.root), os.path.abspath(args.work))
     return report.finish(args.json)

@@ -8,6 +8,8 @@
 #
 # This job builds and runs the student's code, so it must never get secrets: it
 # runs with a read-only token, and pull_request runs from forks get no secrets.
+# On a pull request the checks' scripts come from the target branch (see "Use the
+# checks from the target branch"), so fixing them there and re-running is enough.
 
 name: Homework checks
 
@@ -78,6 +80,19 @@ jobs:
         with:
           path: ws/zephyr-course
 
+      # The checks (scripts and setup action) come from the branch the PR targets as it is now, not
+      # from the PR's merge commit: a fix pushed there applies to the next run, "Re-run" included,
+      # and a PR can't change how it is checked. (This workflow file itself still comes from the
+      # merge commit; GitHub picks it before any step runs.)
+      - name: Use the checks from the target branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git -C zephyr-course fetch --quiet --depth 1 origin "$BASE_REF"
+          rm -rf zephyr-course/.github
+          git -C zephyr-course checkout FETCH_HEAD -- .github
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -125,6 +140,19 @@ jobs:
         with:
           path: ws/zephyr-course
 
+      # The checks (scripts and setup action) come from the branch the PR targets as it is now, not
+      # from the PR's merge commit: a fix pushed there applies to the next run, "Re-run" included,
+      # and a PR can't change how it is checked. (This workflow file itself still comes from the
+      # merge commit; GitHub picks it before any step runs.)
+      - name: Use the checks from the target branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git -C zephyr-course fetch --quiet --depth 1 origin "$BASE_REF"
+          rm -rf zephyr-course/.github
+          git -C zephyr-course checkout FETCH_HEAD -- .github
+
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -165,6 +193,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: ws/zephyr-course
+
+      # The checks (scripts and setup action) come from the branch the PR targets as it is now, not
+      # from the PR's merge commit: a fix pushed there applies to the next run, "Re-run" included,
+      # and a PR can't change how it is checked. (This workflow file itself still comes from the
+      # merge commit; GitHub picks it before any step runs.)
+      - name: Use the checks from the target branch
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          git -C zephyr-course fetch --quiet --depth 1 origin "$BASE_REF"
+          rm -rf zephyr-course/.github
+          git -C zephyr-course checkout FETCH_HEAD -- .github
 
       - uses: actions/setup-python@v5
         with:

@@ -21,6 +21,7 @@ import re
 import sys
 
 from homework_report import Report
+import homework_app as app
 
 TEST_ROOT = "tests/temp_alarm"
 FAKE_H = f"{TEST_ROOT}/include/sensor_fake.h"
@@ -108,7 +109,7 @@ def fake_checks(report, root):
     header, source = read(root, FAKE_H), read(root, FAKE_C)
     if header is None or source is None:
         missing = FAKE_H if header is None else FAKE_C
-        report.check(False, f"`{missing}` exists at the repository root",
+        report.check(False, f"`{missing}` exists at the repository root", path=missing,
                      fix=f"Keep `{missing}` at the repository root, as in the starter; the checks don't look elsewhere.")
         return False
     h, c = strip_comments(header), strip_comments(source)
@@ -147,7 +148,7 @@ def short(identifier):
     return last if last.startswith("test_") else f"test_{last}"
 
 
-def load_twister(report, twister_out, platform):
+def load_twister(report, twister_out, platform, root="."):
     """{test name: [status per scenario]} and the failing assertion lines, or None (already reported)."""
     path = os.path.join(twister_out, "twister.json")
     try:
@@ -165,7 +166,8 @@ def load_twister(report, twister_out, platform):
         ran = [c for c in suite.get("testcases") or [] if c.get("status") not in ("blocked", "skipped", None)]
         if suite.get("status") in ("error", "failed") and not ran and "rc=" not in (suite.get("reason") or ""):
             reason = (suite.get("reason") or suite.get("status"))[:400]
-            report.check(False, "the test binary builds and runs",
+            path, line = app.twister_build_location(twister_out, os.path.join(root, TEST_ROOT), TEST_ROOT)
+            report.check(False, "the test binary builds and runs", path=path, line=line,
                          fix=f"Fix the build of `tests/temp_alarm`: twister reports \"{reason}\". "
                              f"Run `{TWISTER_CMD} -v` to see the error.")
             return None
@@ -183,7 +185,7 @@ def load_twister(report, twister_out, platform):
         if "rc=-11" in (suite.get("reason") or "") or "Segmentation" in log:
             crashed.append(suite.get("name"))
     if crashed:
-        report.check(False, "the test binary runs to the end",
+        report.check(False, "the test binary runs to the end", path=FAKE_C,
                      fix="The test binary crashed (segmentation fault). If a test calls `temp_alarm_check()`, the "
                          "`sample_fetch` fake must be in `fake_sensor_api` (task 0).")
         return None
@@ -229,10 +231,10 @@ def common_args(description):
 def main():
     args = common_args(__doc__.splitlines()[0]).parse_args()
     root = os.path.abspath(args.root)
-    report = Report("l8-task0", "temp_alarm sensor fake")
+    report = Report("l8-task0", "temp_alarm sensor fake", where=FAKE_C)
     if fake_checks(report, root):
         if args.twister_out:
-            twister = load_twister(report, args.twister_out, args.platform)
+            twister = load_twister(report, args.twister_out, args.platform, root)
             if twister:
                 case_checks(report, twister, [PROVIDED[2]], test_lines(root))
         else:

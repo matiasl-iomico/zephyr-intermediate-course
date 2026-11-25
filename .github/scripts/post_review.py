@@ -5,7 +5,9 @@ Runs in the "Homework review" workflow (workflow_run, from the default branch,
 with secrets). It never checks out or runs anything from the PR:
 
 1. Finds the PR through the API from the check run's head repository, branch
-   and SHA, and skips a SHA that was already reviewed.
+   and SHA, and skips a SHA that was already reviewed. A "retry" review (the
+   check run left no result) doesn't count: the next result for that SHA, after
+   an instructor re-runs the failed jobs, is posted as usual.
 2. Takes the task from the PR's branch name, and rejects a PR that targets the
    wrong branch (BASES: each task's starter branch) or changes the files the
    checks rely on (PROTECTED: `.github/`, whose workflow the check run used, and
@@ -17,7 +19,8 @@ with secrets). It never checks out or runs anything from the PR:
    checklist, inline comments on lines in the diff, and labels. Approved PRs
    are closed. A PR left for an instructor gets a review request for the
    instructors in MANUAL_REVIEWER (comma-separated); real problems (a broken
-   check run) also mention them in the review.
+   check run) also mention them in the review. A check run that left no result
+   is our problem, not the student's: the review says so and asks for nothing.
 
     python3 post_review.py --artifacts DIR            # in the workflow
     python3 post_review.py --artifacts DIR --pr 12 --dry-run   # print, post nothing
@@ -48,6 +51,7 @@ LABELS = {
     "approved": ("approved", "0e8a16", "Homework approved by the checks"),
     "changes_needed": ("changes-needed", "d93f0b", "Homework needs changes"),
     "under_review": ("needs-instructor", "fbca04", "An instructor reviews this by hand"),
+    "retry": ("checks-not-run", "b60205", "The checks couldn't run; an instructor runs them again"),
 }
 TASK_LABEL_COLOR = "1d76db"
 # Folders the checks rely on: the workflows and scripts, the course test for L2, and the module the L8 tests run against
@@ -162,9 +166,10 @@ def protected_review(touched, base):
 def decide(task, result, result_problem):
     """Returns (status, summary, changes, reason, routine). routine: an expected instructor review
     (a rule the scripts can't settle), not a problem worth a mention."""
-    if result is None:
-        return ("under_review", f"{result_problem} An instructor will look at it.", [],
-                result_problem, False)
+    if result is None:  # the check run broke before the checker wrote its result: CI's problem, not the student's
+        return ("retry", "The checks couldn't run on this commit because of a problem on our side, not in your "
+                "code. You don't need to do anything: an instructor will run them again and the review will "
+                "appear here.", [], result_problem, False)
     status = result["status"]
     if status == "error":
         msg = (result.get("error") or {}).get("message", "The checks could not evaluate this commit.")
@@ -190,6 +195,7 @@ HEADINGS = {
     "approved": "✅ {task} approved",
     "changes_needed": "❌ {task}: changes needed",
     "under_review": "👀 {task}: an instructor will review this",
+    "retry": "⏳ {task}: the checks couldn't run",
 }
 
 
@@ -199,7 +205,7 @@ def where(c):
     return f" (`{c['path']}" + (f":{c['line']}" if c.get("line") else "") + "`)"
 
 
-def compose(task, sha, status, summary, changes, reason, result, mention):
+def compose(task, sha, status, summary, changes, reason, result, mention, run_url=None):
     """mention: instructors to @-mention (a list), for problems only."""
     lines = [MARKER.format(sha=sha, task=task or "-", status=status),
              f"## {HEADINGS[status].format(task=task or 'Submission')}", "", summary, ""]
@@ -210,6 +216,11 @@ def compose(task, sha, status, summary, changes, reason, result, mention):
     if status == "under_review" and mention:
         who = " ".join(f"@{m}" for m in mention)
         lines += [f"{who}, please review this by hand: {reason or 'see above.'}", ""]
+    if status == "retry" and mention:
+        who = " ".join(f"@{m}" for m in mention)
+        run = f" ([check run]({run_url}))" if run_url else ""
+        lines += [f"{who}, the check run left no result{run}: {reason or 'see the run.'} Fix the cause on the "
+                  "target branch, then re-run the failed jobs; this commit gets its review then.", ""]
     if result:
         checks = result.get("checks") or []
         passed = sum(1 for c in checks if c.get("ok") is True)
@@ -221,6 +232,8 @@ def compose(task, sha, status, summary, changes, reason, result, mention):
     if status == "approved":
         lines.append(f"Reviewed commit {sha[:7]}. Nothing else to do for this task; "
                      "this pull request will be closed.")
+    elif status == "retry":
+        lines.append(f"Commit {sha[:7]}. No need to push again.")
     else:
         lines.append(f"Reviewed commit {sha[:7]}. Push a new commit to this branch "
                      "to get a new review.")
@@ -327,9 +340,10 @@ def main():
         return 0
 
     reviews = bot_reviews(args.repo, pr["number"])
-    if any(r["sha"] == sha for r in reviews):
+    if any(r["sha"] == sha and r["status"] != "retry" for r in reviews):
         log(f"Commit {sha[:7]} was already reviewed on PR #{pr['number']}.")
         return 0
+    retried = any(r["sha"] == sha for r in reviews)  # a "retry" review is already there
 
     task = task_of(pr["head"]["ref"])
     pr_files = gh.get_all(f"repos/{args.repo}/pulls/{pr['number']}/files")
@@ -369,11 +383,14 @@ def main():
         return 0
 
     status, summary, changes, reason, routine = decide(task, result, problem)
+    if status == "retry" and retried:
+        log(f"The checks left no result again for {sha[:7]}; the \"retry\" review is already posted.")
+        return 0
     mention = None if routine else instructors
-    body = compose(task, sha, status, summary, changes, reason, result, mention)
+    body = compose(task, sha, status, summary, changes, reason, result, mention, run.get("html_url"))
     post(args.repo, pr, sha, body, changes, pr_files, args.dry_run)
     set_labels(args.repo, pr, task, status, args.dry_run)
-    if status == "under_review":
+    if status in ("under_review", "retry"):
         request_review(args.repo, pr, instructors, args.dry_run)
     if status == "approved" and close_approved:
         if args.dry_run:

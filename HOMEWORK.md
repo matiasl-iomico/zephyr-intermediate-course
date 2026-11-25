@@ -56,8 +56,10 @@ git switch -c l3-task1
    - ❌ **changes needed**: the review lists what to change, most important first, with the file
      and line where it can. Some items also show as comments on the lines in "Files changed".
      Fix them as shown below.
-   - 👀 **an instructor will review this**: the checks couldn't finish. An instructor looks at it;
-     you don't need to do anything.
+   - 👀 **an instructor will review this**: the checks couldn't decide everything. An instructor
+     looks at it; you don't need to do anything.
+   - ⏳ **the checks couldn't run**: a problem on our side, not in your code. An instructor runs them
+     again and the review appears on the same pull request; you don't need to push anything.
 
 Your first pull request may wait for an instructor to approve running the checks. That happens
 once for new GitHub accounts.

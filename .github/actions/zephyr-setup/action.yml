@@ -12,7 +12,7 @@ inputs:
     description: west manifest file, relative to the course repo
     default: west.yml
   projects:
-    description: west projects to fetch, space separated
+    description: west projects to fetch, space separated; zephyr first
     default: zephyr
   requirements:
     description: Zephyr requirement sets to install, space separated (scripts/requirements-<name>.txt)
@@ -57,9 +57,23 @@ runs:
         MANIFEST: ${{ inputs.manifest }}
         PROJECTS: ${{ inputs.projects }}
         ZEPHYR_PATH: ${{ steps.zephyr.outputs.path }}
+      # `west update <name>` refuses projects that come from Zephyr's own manifest (an `import`, as the
+      # modules in L7's docker/west.yml), so west fetches the first project (zephyr) and git fetches
+      # the rest, each at the revision the resolved manifest pins.
       run: |
         west init -l --mf "$MANIFEST" zephyr-course
-        west update --narrow -o=--depth=1 $PROJECTS
+        first=${PROJECTS%% *}
+        west update --narrow -o=--depth=1 "$first"
+        for p in ${PROJECTS#"$first"}; do
+          read -r url rev path < <(west list -f "{url} {revision} {path}" "$p")
+          if [ "$(git -C "$path" rev-parse -q --verify HEAD 2>/dev/null)" = "$rev" ]; then
+            continue  # restored from the cache
+          fi
+          [ -d "$path/.git" ] || { git init -q "$path"; git -C "$path" remote add origin "$url"; }
+          git -C "$path" fetch -q --depth 1 origin "$rev"
+          git -C "$path" checkout -q --detach FETCH_HEAD
+          echo "$p: $(git -C "$path" rev-parse --short HEAD) in $path"
+        done
         echo "ZEPHYR_BASE=$PWD/$ZEPHYR_PATH" >> "$GITHUB_ENV"
 
     # Before `west zephyr-export`: Zephyr's west commands import these packages (jsonschema, ...).

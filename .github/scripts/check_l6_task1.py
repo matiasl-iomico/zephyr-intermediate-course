@@ -45,13 +45,17 @@ def static_checks(report, root):
         return False
     code = app.strip_comments(text)
     defs = app.defines(code)
+    files = {MAIN: text}
     ok = True
     for name, value in CONSTANTS.items():
-        ok &= report.check(app.eval_int(defs.get(name), defs) == value, f"`{name}` is {value}", path=MAIN,
+        ok &= report.check(app.eval_int(defs.get(name), defs) == value, f"`{name}` is {value}",
+                           **app.where(files, re.compile(r"#\s*define\s+%s\b" % name)),
                            fix=f"Keep `#define {name} {value}`: the fix must keep the starter's workload and the "
                                "10 ms guarantee (TASKS.md, L6).")
     for name in ORIGINAL:
-        ok &= report.check(name in defs, f"the priority is set by `{name}`", path=MAIN,
+        ok &= report.check(name in defs, f"the priority is set by `{name}`",
+                           **app.where(files, re.compile(r"\bK_THREAD_DEFINE\s*\(\s*%s\b" % name.split("_")[0].lower()),
+                                       re.compile(r"\bK_THREAD_DEFINE\s*\(")),
                            fix=f"Keep `#define {name} <n>` and use it for the thread: the checks rebuild the app with "
                                "the original priorities to test your detector.")
     body, line = app.function_body(code, "maintenance_fn")
@@ -142,27 +146,28 @@ def run_checks(report, root, work):
         text = re.sub(r"^(\s*#\s*define\s+%s\s+)[^\n]+" % name, r"\g<1>%d" % value, text, count=1, flags=re.M)
     with open(main, "w") as f:
         f.write(text)
-    ok, log = app.build(orig, os.path.join(work, "build-original"))
-    if not report.check(ok, "the app builds for `native_sim`",
-                        fix=f"Fix the build: {app.build_error(log)}. Try `west build -b native_sim {APP}`."):
+    if not app.check_build(report, root, APP, os.path.join(work, "build-original"), src_dir=orig):
         return
+    files = app.sources(root, APP)
+    control = app.where(files, re.compile(r"\bcontrol_fn\s*\([^;{)]*\)\s*\{"))
     out, _ = app.run_native(os.path.join(work, "build-original"), SECONDS)
     rows = lat_lines(out)
     if not report.check(len(rows) >= MIN_EVENTS, "`[LAT] seq=<n> latency_ms=<ms> misses=<n>` is printed per event",
+                        **app.where(files, "[LAT]", re.compile(r"\bcontrol_fn\s*\([^;{)]*\)\s*\{")),
                         fix="Log `[LAT] seq=<n> latency_ms=<ms> misses=<n>` for every control event, with "
                             "`LOG_INF()` (TASKS.md, L6)."):
         return
     report.check(any(lat > deadline for _, lat, _ in rows),
-                 "with the original priorities, events are late",
+                 "with the original priorities, events are late", **control,
                  fix="With control at 7 and maintenance at 4 no event was late. Measure the start latency as "
                      "`k_uptime_get_32() - event.ready_ms` right after `k_msgq_get()`.")
     report.check(consistent(rows, deadline), "every late event is counted in `misses`",
+                 **app.where(files, re.compile(r"\bmisses\s*(?:\+\+|\+=)"), re.compile(r"\+\+\s*misses\b"), "[LAT]"),
                  fix="`misses` doesn't count every event later than `DEADLINE_MS`. Increment it for each late event, "
                      "outside the rate-limited warning.")
 
     # 2. As submitted: no event late.
-    ok, log = app.build(os.path.join(root, APP), os.path.join(work, "build"))
-    if not report.check(ok, "the fixed app builds", fix=f"Fix the build: {app.build_error(log)}."):
+    if not app.check_build(report, root, APP, os.path.join(work, "build"), label="the fixed app builds"):
         return
     out, _ = app.run_native(os.path.join(work, "build"), SECONDS)
     rows = lat_lines(out)
@@ -180,7 +185,7 @@ def main():
     ap.add_argument("--json", help="write the result JSON here")
     args = ap.parse_args()
     root, work = os.path.abspath(args.root), os.path.abspath(args.work)
-    report = Report("l6-task1", "Runtime investigation")
+    report = Report("l6-task1", "Runtime investigation", where=MAIN)
     ok = static_checks(report, root)
     evidence_checks(report, root)
     if ok and not args.no_run:

@@ -16,7 +16,9 @@ void counter_increment_unsafe(void)
 /* The whole update under the same mutex in every caller. */
 void counter_increment(void)
 {
+	k_mutex_lock(&counter_lock, K_FOREVER);
 	counter++;
+	k_mutex_unlock(&counter_lock);
 }
 
 int counter_get(void)

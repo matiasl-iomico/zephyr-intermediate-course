@@ -2,7 +2,7 @@
 #include <zephyr/task_wdt/task_wdt.h>
 
 #define Q_LEN       8
-#define WARN_PCT    50
+#define WARN_PCT    75
 #define WDT_MS      1000
 #define STALL_SEQ   20
 
